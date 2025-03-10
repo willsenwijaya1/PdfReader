@@ -2,19 +2,19 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import os
+from io import BytesIO
 from openpyxl import load_workbook
 
-# Fungsi untuk ekstrak tabel dari PDF
-def extract_tables_from_pdf(pdf_path):
+def extract_tables_from_pdf(pdf_file):
     all_extracted_data = []
     pending_row = None
-    
+
     def clean_text(text):
         if pd.isnull(text):
             return ''
         return str(text).strip().lower().replace('\n', ' ')
 
-    with pdfplumber.open(pdf_path) as pdf:
+    with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
             for table in tables:
@@ -28,11 +28,11 @@ def extract_tables_from_pdf(pdf_path):
                 if last_row.isnull().sum() > 0:
                     pending_row = last_row
                     df = df[:-1]
-                
+
                 all_extracted_data.append(df)
+    
     return all_extracted_data
 
-# Fungsi untuk memperbaiki data yang tidak sejajar
 def perbaiki_nilai_tidak_sejajar(df):
     for i in range(len(df) - 1):
         if 'jumlah dianalisa' in df.iloc[i].values:
@@ -44,6 +44,7 @@ def perbaiki_nilai_tidak_sejajar(df):
             for col in range(len(df.columns)):
                 header = df.iloc[header_row, col]
                 value = df.iloc[value_row, col]
+                
                 if pd.notna(header):
                     header_positions[col] = header
                 if pd.notna(value):
@@ -58,40 +59,43 @@ def perbaiki_nilai_tidak_sejajar(df):
                     df.iloc[value_row, col] = None
     return df
 
-# Fungsi untuk memproses semua PDF dalam folder
-def process_all_pdfs_in_folder(folder_path, output_excel):
-    all_data = []
-    for file in os.listdir(folder_path):
-        if file.endswith(".pdf"):
-            pdf_path = os.path.join(folder_path, file)
-            extracted_data = extract_tables_from_pdf(pdf_path)
-            if extracted_data:
-                all_data.extend(extracted_data)
+def process_pdf(file):
+    extracted_data = extract_tables_from_pdf(file)
+    if extracted_data:
+        df_raw = pd.concat(extracted_data, ignore_index=True)
+        df_clean = perbaiki_nilai_tidak_sejajar(df_raw.copy())
+        return df_raw, df_clean
+    return None, None
+
+def save_to_excel(df_raw, df_clean):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_raw.to_excel(writer, sheet_name='Sheet1', index=False)
+        df_clean.to_excel(writer, sheet_name='Sheet2', index=False)
+    output.seek(0)
+    return output
+
+st.title("Ekstraksi dan Pemrosesan PDF")
+
+uploaded_file = st.file_uploader("Upload file PDF", type=["pdf"])
+
+if uploaded_file is not None:
+    with st.spinner("Memproses PDF..."):
+        df_raw, df_clean = process_pdf(uploaded_file)
     
-    if all_data:
-        raw_df = pd.concat(all_data, ignore_index=True)
-        raw_df.to_excel(output_excel, sheet_name='Sheet1', index=False, header=True)
+    if df_raw is not None:
+        st.subheader("Data Mentah (Sheet1)")
+        st.dataframe(df_raw)
         
-        processed_df = perbaiki_nilai_tidak_sejajar(raw_df)
-        with pd.ExcelWriter(output_excel, engine='openpyxl', mode='a') as writer:
-            processed_df.to_excel(writer, sheet_name='Sheet2', index=False)
-    
-# Streamlit UI
-st.title("📑 PDF Table Extractor")
-
-uploaded_files = st.file_uploader("Upload file PDF", accept_multiple_files=True, type=['pdf'])
-output_excel = "output_tabel.xlsx"
-
-if st.button("Proses PDF") and uploaded_files:
-    folder_path = "uploaded_pdfs"
-    os.makedirs(folder_path, exist_ok=True)
-    
-    for uploaded_file in uploaded_files:
-        with open(os.path.join(folder_path, uploaded_file.name), "wb") as f:
-            f.write(uploaded_file.getbuffer())
-    
-    process_all_pdfs_in_folder(folder_path, output_excel)
-    st.success(f"Proses selesai! Data bersih di Sheet2 dalam {output_excel}.")
-    
-    with open(output_excel, "rb") as f:
-        st.download_button("Download hasil", f, file_name=output_excel)
+        st.subheader("Data Bersih (Sheet2)")
+        st.dataframe(df_clean)
+        
+        excel_data = save_to_excel(df_raw, df_clean)
+        st.download_button(
+            label="Unduh Hasil dalam Excel",
+            data=excel_data,
+            file_name="output_tabel.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.error("Tidak ada tabel yang ditemukan dalam PDF.")
