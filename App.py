@@ -5,7 +5,7 @@ import tempfile
 import os
 from openpyxl import load_workbook
 
-st.title("📑 PDF Table Extractor & Formatter")
+st.title("📑 PDF Table Extractor")
 
 uploaded_files = st.file_uploader("Upload PDF", type=["pdf"], accept_multiple_files=True)
 
